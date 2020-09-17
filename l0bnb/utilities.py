@@ -53,7 +53,7 @@ def branch(current_node, x, l0, l2, m, xi_xi, tol, branching_type, mu):
     if branching_type == 'maxfrac':
         branching_variable = \
             max_fraction_branching(current_node.z, tol)
-        branching_variable = current_node.support[branching_variable]
+        branching_variable = current_node.z_support[branching_variable]
     # elif branching_type == 'strong':
     #     branching_variable = \
     #         strong_branching(current_node, x, l0, l2, m, xi_xi, mu)

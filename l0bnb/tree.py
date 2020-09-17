@@ -10,7 +10,7 @@ from .utilities import branch, is_integral
 
 
 class BNBTree:
-    def __init__(self, x, y, int_tol=1e-4, rel_tol=1e-4):
+    def __init__(self, x, y, group_indices, int_tol=1e-4, rel_tol=1e-4):
         """
         Initiate a BnB Tree to solve the least squares regression problem with
         l0l2 regularization
@@ -21,6 +21,8 @@ class BNBTree:
             n x p numpy array
         y: np.array
             1 dimensional numpy array of size n
+        group_indices: list
+            Each element is a list of indices.
         int_tol: float, optional
             The integral tolerance of a variable. Default 1e-4
         rel_tol: float, optional
@@ -28,6 +30,7 @@ class BNBTree:
         """
         self.x = x
         self.y = y
+        self.group_indices = group_indices
         self.int_tol = int_tol
         self.rel_tol = rel_tol
         self.xi_norm = np.linalg.norm(x, axis=0) ** 2
@@ -35,6 +38,8 @@ class BNBTree:
         # The number of features
         self.p = x.shape[1]
         self.n = x.shape[0]
+
+        self.num_groups = len(self.group_indices)
 
         self.bfs_queue = None
         self.dfs_queue = None
@@ -46,7 +51,7 @@ class BNBTree:
         self.root = None
 
     def solve(self, l0, l2, m, gap_tol=1e-2, warm_start=None, mu=0.95,
-              branching='maxfrac', l1solver='l1cd', number_of_dfs_levels=0,
+              branching='maxfrac', l1solver='gurobi', number_of_dfs_levels=0,
               verbose=False, time_limit=3600):
         """
         Solve the least squares problem with l0l2 regularization
@@ -83,13 +88,13 @@ class BNBTree:
             cost, beta, sol_time, lower_bound, gap
         """
         st = time.time()
-        upper_bound, upper_beta, support = self. \
+        upper_bound, upper_beta, support, z_support = self. \
             _warm_start(warm_start, verbose, l0, l2, m)
         if verbose:
             print(f"initializing took {time.time() - st} seconds")
 
         # root node
-        self.root = Node(None, [], [], x=self.x, y=self.y,
+        self.root = Node(None, [], [], x=self.x, y=self.y, group_indices=self.group_indices,
                          xi_norm=self.xi_norm)
         self.bfs_queue = queue.Queue()
         self.dfs_queue = queue.LifoQueue()
@@ -131,6 +136,7 @@ class BNBTree:
                 upper_bound = curr_upper_bound
                 upper_beta = curr_node.upper_beta
                 support = curr_node.support
+                z_support = curr_node.z_support
                 best_gap = \
                     (upper_bound - max_lower_bound_value) / abs(upper_bound)
 
@@ -151,7 +157,7 @@ class BNBTree:
             # arrived at a solution?
             if best_gap <= gap_tol:
                 return self._package_solution(upper_beta, upper_bound,
-                                              lower_bound, best_gap, support,
+                                              lower_bound, best_gap, support, z_support,
                                               self.p, time.time() - st)
 
             # integral solution?
@@ -179,11 +185,11 @@ class BNBTree:
                 pass
 
         return self._package_solution(upper_beta, upper_bound, lower_bound,
-                                      best_gap, support, self.p,
+                                      best_gap, support, z_support, self.p,
                                       time.time() - st)
 
     @staticmethod
-    def _package_solution(upper_beta, upper_bound, lower_bound, gap, support,
+    def _package_solution(upper_beta, upper_bound, lower_bound, gap, support, z_support,
                           p, sol_time):
         _sol_str = 'cost beta sol_time lower_bound gap'
         Solution = namedtuple('Solution', _sol_str)
@@ -210,29 +216,12 @@ class BNBTree:
             if verbose:
                 print("used a warm start")
             support = np.nonzero(warm_start)[0]
+            z_supp = set()
+            for feature_index in support:
+                for group_index in range(self.num_groups):
+                    if feature_index in self.group_indices[group_index]:
+                        z_supp.add(group_index)
+                        break
             upper_bound, upper_beta = \
-                upper_bound_solve(self.x, self.y, l0, l2, m, support)
-            return upper_bound, upper_beta, support
-
-    # def get_lower_optimal_node(self):
-    #     self.leaves = sorted(self.leaves)
-    #     if self.leaves[-1].lower_bound_value:
-    #         return self.leaves[-1]
-    #     else:
-    #         return self.leaves[-1].parent
-    #
-    # @staticmethod
-    # def support_list(current_node):
-    #     list_ = []
-    #     while current_node:
-    #         list_.append(current_node.support)
-    #         current_node = current_node.parent
-    #     return list_
-    #
-    # def optimal_support_list(self):
-    #     list_ = []
-    #     current_node = self.get_lower_optimal_node()
-    #     while current_node:
-    #         list_.append(current_node.support)
-    #         current_node = current_node.parent
-    #     return list_
+                upper_bound_solve(self.x, self.y, l0, l2, m, support, z_supp)
+            return upper_bound, upper_beta, support, z_supp

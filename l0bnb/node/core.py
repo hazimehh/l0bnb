@@ -40,12 +40,14 @@ class Node:
         m: float
             The bound for the features (\beta). If not specified the data will
             be inherited from the parent node
+        group_indices: list
+            If not specified, will be inherited from the parent.
         """
         self.x = kwargs.get('x', parent.x if parent else None)
         self.y = kwargs.get('y', parent.y if parent else None)
         self.xi_norm = kwargs.get('xi_norm',
                                   parent.xi_norm if parent else None)
-
+        self.group_indices = kwargs.get('group_indices', parent.group_indices if parent else None)
         self.parent_dual = parent.dual_value if parent else None
         self.parent_primal = parent.primal_value if parent else None
 
@@ -67,42 +69,39 @@ class Node:
         self.dual_value = None
 
         self.support = None
+        self.z_support = None
         self.upper_beta = None
         self.primal_beta = None
 
     def lower_solve(self, l0, l2, m, solver, rel_tol, int_tol=1e-6):
         if solver == 'l1cd':
-            sol = cd_solve(x=self.x, y=self.y, l0=l0, l2=l2, m=m, zlb=self.zlb,
-                           zub=self.zub, xi_norm=self.xi_norm, rel_tol=rel_tol,
-                           warm_start=self.warm_start, r=self.r)
-            self.primal_value = sol.primal_value
-            self.dual_value = sol.dual_value
-            self.primal_beta = sol.primal_beta
-            self.z = sol.z
-            self.support = sol.support
-            self.r = sol.r
-        else:
+            raise ValueError(f'solver {solver} not supported')
+        elif solver == 'gurobi':
             full_zlb = np.zeros(self.x.shape[1])
             full_zlb[self.zlb] = 1
             full_zub = np.ones(self.x.shape[1])
             full_zub[self.zub] = 0
-            if solver == 'gurobi':
-                primal_beta, z, self.primal_value, self.dual_value = \
-                    l0gurobi(self.x, self.y, l0, l2, m, full_zlb, full_zub)
-            elif solver == 'mosek':
-                primal_beta, z, self.primal_value, self.dual_value = \
-                    l0mosek(self.x, self.y, l0, l2, m, full_zlb, full_zub)
-            else:
-                raise ValueError(f'solver {solver} not supported')
+            primal_beta, z, self.primal_value, _ = \
+                l0gurobi(self.x, self.y, self.group_indices, l0, l2, m, full_zlb, full_zub)
+            self.dual_value = self.primal_value
+        else:
+            raise ValueError(f'solver {solver} not supported')
 
-            self.support = list(np.where(abs(primal_beta) > int_tol)[0])
-            self.primal_beta = primal_beta[self.support]
-            self.z = z[self.support]
+        self.support = list(np.where(abs(primal_beta) > int_tol)[0])
+        self.primal_beta = primal_beta[self.support]
+        z_supp = set()
+        for feature_index in self.support:
+            for group_index in range(len(self.group_indices)):
+                if feature_index in self.group_indices[group_index]:
+                    z_supp.add(group_index)
+                    break
+        self.z_support = list(z_supp)
+        self.z = z[self.z_support]
         return self.primal_value, self.dual_value
 
     def upper_solve(self, l0, l2, m):
         upper_bound, upper_beta = upper_bound_solve(self.x, self.y, l0, l2, m,
-                                                    self.support)
+                                                    self.support, self.z_support)
         self.upper_bound = upper_bound
         self.upper_beta = upper_beta
         return upper_bound
